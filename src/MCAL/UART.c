@@ -2,18 +2,20 @@
 #include "stdint.h"
 #include "math.h"
 
-#define oversampling        16
+#define fclk                16000000L
 #define mantissaDiv_mask    0xfff0
-#define mantissa_leftshift  4
-#if oversampling == 16
-    #define fractionDiv_mask 0xf
-#elif oversampling == 8
-    #define fractionDiv_mask 0x7
-#endif
+#define mantissa_leftshift_4  4
+#define fractionDiv_mask    0xf
+
 #define UART_Enable_Mask                0x2000
 #define UART_Transmission_Enable_mask   0x8
 #define UART_Reciever_Enable_Mask       0x4
 #define TC_mask                         0x40
+#define stop_bit_mask                   0x3000
+
+#define UART_PARITY_ON                     0x00000400
+#define UART_PARITY_SELECT_MASK            0x00000200
+#define UART_PARITY_CONTROL_MASK           0x00000400
 
 typedef struct{
     u32 SR;
@@ -25,27 +27,134 @@ typedef struct{
     u32 GTPR;
 }UART_reg_t;
 
-volatile UART_reg_t* const UART1 = (UART_reg_t* const) 0x40011000; //fix
+volatile UART_reg_t* const UART1 = (UART_reg_t* const) 0x40011000; 
 
 
 
 u8 UART_TxDone(void){
-    return (u8)(UART1->SR & TxEIE_mask);
+    return (u8)(UART1->SR & TC_mask);
 }
 
 u8 UART_IsRxDone(void){
     return (u8)(UART1->SR & RxNEIE_mask);
 }
 
-u8 UART_getRx(void){
-    return (u8)(UART1->DR);
+UART_Error_t UART1_Init(uart_cfg_t * uart_cfg){
+    UART_Error_t Ret_ErrorStatus = UART_enum_Nok;
+    if(!uart_cfg){
+        Ret_ErrorStatus = UART_enum_NullPointer;
+    }else if((uart_cfg->oversampling != oversampling_16)&& \
+      (uart_cfg->oversampling != oversampling_8)&& \
+      (uart_cfg->parity_selection != parity_even_selection)&& \
+      (uart_cfg->parity_selection != parity_odd_selection) && \
+      (uart_cfg->parity_selection != parity_none)&& \
+      (uart_cfg->stopBits != stop_bits_1_mask)&& \
+      (uart_cfg->stopBits != stop_bits_2_mask) && \
+      (uart_cfg->wordLength != word_length_8_mask )&& \
+      (uart_cfg->wordLength != word_length_9_mask) ){
+        Ret_ErrorStatus =UART_enum_invalidValue;
+      }else{
+        
+        f32 OVER8= (uart_cfg->oversampling==oversampling_16)?0:1;
+        u32 MaxBaudRate= fclk/(8*(2-OVER8));
+        if(uart_cfg->baudrate>MaxBaudRate)
+        {
+            Ret_ErrorStatus=UART_enum_invalidValue; 
+        }
+        else
+        {
+            u32 Loc_Reg=UART1->CR1;
+            Loc_Reg|=UART_Enable_Mask;
+            
+            Loc_Reg&=~(word_length_9_mask);
+            Loc_Reg|=(uart_cfg->wordLength);
+            UART1->CR1=Loc_Reg;
+
+            Loc_Reg=UART1->CR2;
+            Loc_Reg&=~stop_bit_mask;
+            Loc_Reg|=(uart_cfg->stopBits);
+            UART1->CR2=Loc_Reg;
+
+            Loc_Reg=UART1->CR1;
+            Loc_Reg&=~UART_PARITY_CONTROL_MASK;
+            if(uart_cfg->parity_selection==parity_none)
+            {
+               Loc_Reg|=parity_none;
+            }
+            else
+            {
+                Loc_Reg|=UART_PARITY_ON;
+                Loc_Reg&=~UART_PARITY_SELECT_MASK;
+                Loc_Reg|=uart_cfg->parity_selection;
+            }
+            UART1->CR1=Loc_Reg;
+
+            /*Select Baud Rate*/
+            f32 USARTDIV=((f32)(fclk)/((uart_cfg->baudrate)*8*(2-OVER8)));
+            f32 FracionBoundary=(uart_cfg->oversampling==oversampling_16)?16:8;
+            u32 DIV_Fraction=(u32)(FracionBoundary*(f32)((f32)USARTDIV-(u32)USARTDIV))+1;
+            u32 MAXVALUE=(uart_cfg->oversampling==oversampling_16)?15:7;
+            u32 DIV_Mantissa=0;
+            if(DIV_Fraction>MAXVALUE)
+            {
+                DIV_Fraction=0;
+                DIV_Mantissa=(u32)USARTDIV+1;
+            }
+            else
+            {
+                DIV_Mantissa= (u32)USARTDIV;
+            }
+
+            Loc_Reg=UART1->BRR;
+            Loc_Reg&=~mantissaDiv_mask;
+            Loc_Reg|=DIV_Mantissa<<mantissa_leftshift_4;
+
+            Loc_Reg&=~fractionDiv_mask;
+            Loc_Reg|=DIV_Fraction;
+
+            UART1->BRR=Loc_Reg;
+
+            Loc_Reg=UART1->CR1;
+            Loc_Reg|=UART_Transmission_Enable_mask;
+
+            Loc_Reg|=UART_Reciever_Enable_Mask;
+            UART1->CR1=Loc_Reg;
+        } 
+      }
+      return Ret_ErrorStatus;
 }
 
-void UART_sendByte(u8 byte){
-    while(! UART_TxDone());
-    UART1->DR=byte;
-    //while(!(UART1->SR & TC_mask));
-   
+UART_Error_t UART_getRx(u8* byte){
+    UART_Error_t Ret_ErrorStatus = UART_enum_Nok;
+    u16 timeout=3000;
+    while(timeout--&&(!(UART1->SR&RxNE)));
+    if(UART1->SR&RxNE)
+    {
+        *byte=(u8)UART1->DR;
+        Ret_ErrorStatus=UART_enum_Ok;
+    }
+    else{
+        Ret_ErrorStatus=UART_enum_Timeout;
+    }
+    return Ret_ErrorStatus;
+}
+
+UART_Error_t UART_sendByte(u8 byte){
+    UART_Error_t Ret_ErrorStatus = UART_enum_Nok;
+    u16 timeout = 3000;
+    UART1->SR &=~ TC_mask;
+    UART1->DR = byte;
+
+    while (timeout-- && (!(UART1->SR & TC_mask)));
+        
+    if (timeout == 0) {
+            Ret_ErrorStatus = UART_enum_Timeout;
+    } else if (UART1->SR & TC_mask) {
+            Ret_ErrorStatus = UART_enum_Ok;
+            
+    }
+    
+    return Ret_ErrorStatus;
 }
 
 void UART_enableInterrupt(u8 interrupt){
@@ -54,89 +163,4 @@ void UART_enableInterrupt(u8 interrupt){
 
 void UART_disableInterrupt(u8 interrupt){
     UART1->CR1 &= ~interrupt;
-}
-
-void UART_setBaudrate(u32 baudrate,u32 fclk){
-    u32 mantissaDiv;
-    u8 fractionDiv;
-    u8 carry;
-    f32 uartDiv =(f32) fclk/(oversampling * baudrate);
-    u32 mantissa = (u32)uartDiv;
-    u32 fraction = ceil(( uartDiv - mantissa )*oversampling);
-    if(fraction >= oversampling){
-        carry = fraction -(oversampling-1);
-        mantissaDiv = (u32)(uartDiv + carry);
-        fractionDiv = fraction & (oversampling -1); 
-    }else{
-        mantissaDiv = mantissa;
-        fractionDiv = fraction;
-    }
-    UART1->BRR= (mantissaDiv << mantissa_leftshift)|(fractionDiv & fractionDiv_mask);
-}
-
-UART_Error_t UART_configFrame(frame_t* frame){
-    UART_Error_t Ret_statusError =UART_enum_Nok;
-    if((frame->dataBits != word_length_8_mask )&&
-        (frame->dataBits != word_length_9_mask ) &&
-        (frame->stopBits != stop_bits_1_mask) &&
-        (frame->stopBits != stop_bits_2_mask) &&
-        (frame->parity_enable != parity_enable_mask) &&
-        (frame->parity_enable != parity_disable_mask)&&
-        (frame->parityType != parity_even_selection)&&
-        (frame->parityType != parity_odd_selection)){
-            Ret_statusError = UART_enum_invalidValue;
-        }
-        else{
-            Ret_statusError = UART_enum_Ok;
-            UART1->CR1 |= (frame->dataBits)|(frame->parity_enable);
-            UART1->CR1 |= frame->parityType;
-            UART1->CR2 |= frame->stopBits;
-            if(oversampling == 8){
-                UART1->CR1 |= oversampling_8_mask;
-            }
-        }
-    return Ret_statusError;
-}
-
-UART_Error_t UART_control(u8 status,u16 mode){
-    UART_Error_t Ret_ErrorStatus = UART_enum_Nok;
-    switch(status){
-        case Enable:
-            Ret_ErrorStatus =UART_enum_Ok;
-            UART1->CR1 |= UART_Enable_Mask;
-            u8* ptr =(u8*)&mode;
-            ptr++;
-            if(*ptr != 0x01){
-                Ret_ErrorStatus = UART_enum_invalidValue;
-            }else{
-                Ret_ErrorStatus = UART_enum_Ok;
-                switch(mode){
-                    case mode_Rx_only:
-                        UART1->CR1 |= UART_Reciever_Enable_Mask;
-                        UART1->CR1 |= RxNEIE_mask;
-                        break;
-                    case mode_Tx_only:
-                        UART1->CR1 |= UART_Transmission_Enable_mask;
-                        UART1->CR1 |= TxEIE_mask;
-                        break;
-                    case mode_Tx_Rx:
-                        UART1->CR1 |= (UART_Transmission_Enable_mask | UART_Reciever_Enable_Mask);
-                        UART1->CR1 |=(TxEIE_mask|RxNEIE_mask);
-                        break;
-                    default:
-                        Ret_ErrorStatus=UART_enum_invalidValue;
-                        break;
-                }
-            }
-            UART1->SR =0;
-            break;
-        case Disable:
-            Ret_ErrorStatus =UART_enum_Ok;
-            UART1->CR1 &= ~UART_Enable_Mask;
-            break;
-        default:
-            Ret_ErrorStatus = UART_enum_invalidValue;
-            break;
-    }
-    return Ret_ErrorStatus;
 }

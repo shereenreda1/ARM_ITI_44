@@ -32,6 +32,7 @@ GPIO_Error_t gpio_initPin(gpiopin_t * pin){
 			Ret_ErrorStatus = GPIO_enum_invalidValue;
 	}
 	else{
+		Ret_ErrorStatus = GPIO_enum_Ok;
 		((gpio_t*)pin->port) -> MODER |= (pin->mode_t ->mode)<<(MODER_bit_offset*(pin->pin));
 		((gpio_t*)pin->port) -> PUPDR |= (pin->mode_t ->pupd)<<(PUPDR_bit_offset*(pin->pin));
 		if((pin->mode_t ->mode) == gpio_mode_out || (pin->mode_t ->mode) == gpio_mode_AF){
@@ -61,6 +62,7 @@ GPIO_Error_t gpio_initPin(gpiopin_t * pin){
 	}*/
 	return Ret_ErrorStatus;
 }
+
 GPIO_Error_t gpio_setPinValue(void* port,u32 pin,u8 value){
 	GPIO_Error_t Ret_ErrorStatus =GPIO_enum_Nok;
 	if(!port){

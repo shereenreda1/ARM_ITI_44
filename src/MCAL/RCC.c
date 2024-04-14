@@ -100,8 +100,8 @@ RCC_ErrorStatus_t configurePLL(u16 M, u16 N,u8 P,u32 source){
 				((source == RCC_PLL_SRC_HSI) && ((RCC->CR & RCC_EN_HSI)==Clock_diasbled))){
 			Ret_enumErrorStatus = RCC_enumPLLSourceNotEnabled;
 		}
-		else if((M<2 || M>63 )||(P != RCC_PLLP_DIV2 || P!= RCC_PLLP_DIV4 || P!= RCC_PLLP_DIV6 || P!= RCC_PLLP_DIV8)||\
-				(N<192 || N>432)){
+		else if((M<2 && M>63 )&&(P != RCC_PLLP_DIV2 && P!= RCC_PLLP_DIV4 && P!= RCC_PLLP_DIV6 && P!= RCC_PLLP_DIV8)&&\
+				(N<192 && N>432)){
 			Ret_enumErrorStatus = RCC_enumWrongPLLConfiguration;
 		}
 		else{
@@ -176,17 +176,20 @@ RCC_ErrorStatus_t selectSysClock(RCC_enuClock_t sysclk){
 
 
 RCC_ErrorStatus_t configure_prescalers(u64 prescale){
-	RCC_ErrorStatus_t Ret_enumErrorStatus = RCC_enumOk;
+	RCC_ErrorStatus_t Ret_enumErrorStatus = RCC_enumNok;
 	u32* ptr = (u32*)&prescale;
 	ptr++;
 	switch(*ptr){
 		case 0x8:
+			Ret_enumErrorStatus = RCC_enumOk;
 			RCC->CFGR &= ~RCC_PRE_AHB_SYSCLK_DIV_BY_512;
 			break;
 		case 0x9:
+			Ret_enumErrorStatus = RCC_enumOk;
 			RCC->CFGR &= ~RCC_PRE_APB1_DIV_BY_16;
 			break;
 		case 0xA:
+			Ret_enumErrorStatus = RCC_enumOk;
 			RCC->CFGR &= ~RCC_PRE_APB2_DIV_BY_16;
 			break;
 		default:
